@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result};
+use anyhow::{anyhow, Context, Ok, Result};
 use serde_json::Value;
 use solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig};
 use solana_sdk::commitment_config::CommitmentConfig;
@@ -119,9 +119,9 @@ fn write_transaction_transfers<W: Write>(
                                         UiParsedInstruction::Parsed(parsed_instruction) => {
                                             if parsed_instruction.program == "spl-token" {
                                                 let transfer = handle_parsed_instruction(
-                                                    &parsed_instruction.parsed,
-                                                    &accounts_map,
-                                                );
+                                                    parsed_instruction.parsed,
+                                                    &mut accounts_map,
+                                                )?;
                                                 if let Some(transfer) = transfer {
                                                     if print_sig {
                                                         // println!("");
@@ -245,180 +245,59 @@ impl Transfer {
 }
 
 fn handle_parsed_instruction(
-    parsed_instruction: &Value,
-    accounts_map: &HashMap<String, (String, String)>,
-) -> Option<Transfer> {
-    match parsed_instruction {
-        Value::Object(map) => {
-            if let Some(type_) = map.get("type") {
-                // we only want to handle USDC transfers, but we don't know the mint key until we lookup the source and destination in accounts_mapping
-                if type_ == "transfer" {
-                    if let Some(info) = map.get("info") {
-                        match info {
-                            Value::Object(info_map) => {
-                                let (source_owner, source_mint) =
-                                    if let Some(source) = info_map.get("source") {
-                                        match source {
-                                            Value::String(source) => {
-                                                if let Some(thing) = accounts_map.get(source) {
-                                                    thing.clone()
-                                                } else {
-                                                    return None;
-                                                }
-                                            }
-                                            _ => todo!(),
-                                        }
-                                    } else {
-                                        todo!()
-                                    };
-                                let (destination_owner, destination_mint) =
-                                    if let Some(destination) = info_map.get("destination") {
-                                        match destination {
-                                            Value::String(destination) => {
-                                                if let Some(thing) = accounts_map.get(destination) {
-                                                    thing.clone()
-                                                } else {
-                                                    return None;
-                                                }
-                                            }
-                                            _ => todo!(),
-                                        }
-                                    } else {
-                                        todo!()
-                                    };
-                                let raw_amount = if let Some(amount) = info_map.get("amount") {
-                                    match amount {
-                                        Value::String(amount) => amount.clone(),
-                                        _ => todo!(),
-                                    }
-                                } else {
-                                    todo!()
-                                };
+    mut parsed_instruction: Value,
+    accounts_map: &mut HashMap<String, (String, String)>,
+) -> Result<Option<Transfer>> {
+    let type_ = parsed_instruction["type"].take();
+    let type_ = type_
+        .as_str()
+        .context("type not found in instruction JSON")?;
 
-                                if source_mint != destination_mint {
-                                    panic!("source and destination mints do no match");
-                                } else if source_mint == TOKEN_MINT_ADDRESS {
-                                    Some(Transfer {
-                                        source_owner,
-                                        destination_owner,
-                                        formatted_amount: format_amount(&raw_amount),
-                                    })
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => todo!(),
-                        }
-                    } else {
-                        todo!()
-                    }
-                } else if type_ == "transferChecked" {
-                    // TODO
-                    if let Some(info) = map.get("info") {
-                        match info {
-                            Value::Object(info_map) => {
-                                let mint = if let Some(mint) = info_map.get("mint") {
-                                    match mint {
-                                        Value::String(mint) => mint.clone(),
-                                        _ => todo!(),
-                                    }
-                                } else {
-                                    todo!()
-                                };
+    if type_ == "transfer" || type_ == "transferChecked" {
+        let mut info = parsed_instruction["info"].take();
 
-                                if mint == TOKEN_MINT_ADDRESS {
-                                    // println!("transferChecked");
+        let source = info["source"].take();
+        let err_message = "source not found in instruction JSON";
+        let source = source.as_str().context(err_message)?;
 
-                                    // TODO some of this is duplicated from above
-                                    if let Some(info) = map.get("info") {
-                                        match info {
-                                            Value::Object(info_map) => {
-                                                let (source_owner, source_mint) =
-                                                    if let Some(source) = info_map.get("source") {
-                                                        match source {
-                                                            Value::String(source) => {
-                                                                if let Some(thing) =
-                                                                    accounts_map.get(source)
-                                                                {
-                                                                    thing.clone()
-                                                                } else {
-                                                                    return None;
-                                                                }
-                                                            }
-                                                            _ => todo!(),
-                                                        }
-                                                    } else {
-                                                        todo!()
-                                                    };
-                                                let (destination_owner, destination_mint) =
-                                                    if let Some(destination) =
-                                                        info_map.get("destination")
-                                                    {
-                                                        match destination {
-                                                            Value::String(destination) => {
-                                                                if let Some(thing) =
-                                                                    accounts_map.get(destination)
-                                                                {
-                                                                    thing.clone()
-                                                                } else {
-                                                                    return None;
-                                                                }
-                                                            }
-                                                            _ => todo!(),
-                                                        }
-                                                    } else {
-                                                        todo!()
-                                                    };
-                                                let raw_amount = if let Some(token_amount) =
-                                                    info_map.get("tokenAmount")
-                                                {
-                                                    token_amount
-                                                        .get("amount")
-                                                        .unwrap()
-                                                        .as_str()
-                                                        .unwrap()
-                                                        .to_string()
-                                                } else {
-                                                    todo!()
-                                                };
+        let destination = info["destination"].take();
+        let err_message = "destination not found in instruction JSON";
+        let destination = destination.as_str().context(err_message)?;
 
-                                                if source_mint != destination_mint {
-                                                    panic!(
-                                                        "source and destination mints do no match"
-                                                    );
-                                                } else if source_mint == TOKEN_MINT_ADDRESS {
-                                                    Some(Transfer {
-                                                        source_owner,
-                                                        destination_owner,
-                                                        formatted_amount: format_amount(
-                                                            &raw_amount,
-                                                        ),
-                                                    })
-                                                } else {
-                                                    None
-                                                }
-                                            }
-                                            _ => todo!(),
-                                        }
-                                    } else {
-                                        todo!()
-                                    }
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => todo!(),
-                        }
-                    } else {
-                        todo!()
-                    }
-                } else {
-                    None
-                }
-            } else {
-                panic!("no type found");
-            }
+        // we only want to handle USDC transfers, but we don't know the mint key until we lookup the source and destination in accounts_mapping
+        // Instruction might not be for the correct mint, so might not exist in accounts_map
+        let Some((source_owner, source_mint)) = accounts_map.get(source) else {
+            return Ok(None);
+        };
+        let Some((destination_owner, destination_mint)) = accounts_map.get(destination) else {
+            return Ok(None);
+        };
+
+        if source_mint != destination_mint {
+            return Err(anyhow!("source and destination mint do not match"));
         }
-        _ => todo!(),
+
+        if source_mint == TOKEN_MINT_ADDRESS {
+            let (raw_amount, message) = if type_ == "transfer" {
+                let raw_amount = info["amount"].take();
+                let message = "amount not found in instruction JSON";
+                (raw_amount, message)
+            } else if type_ == "transferChecked" {
+                let mut token_amount = info["tokenAmount"].take();
+                let raw_amount = token_amount["amount"].take();
+                let message = "amount not found in tokenAmount JSON";
+                (raw_amount, message)
+            } else {
+                panic!("unexpected instruction type");
+            };
+            let raw_amount = raw_amount.as_str().context(message)?;
+
+            return Ok(Some(Transfer {
+                source_owner: source_owner.clone(),
+                destination_owner: destination_owner.clone(),
+                formatted_amount: format_amount(raw_amount),
+            }));
+        }
     }
+    Ok(None)
 }
