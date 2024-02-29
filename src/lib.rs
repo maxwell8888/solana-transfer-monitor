@@ -1,8 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use solana_client::{
-    connection_cache::BlockingClientConnection, rpc_client::RpcClient, rpc_config::RpcBlockConfig,
-};
+use solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_transaction_status::{
     option_serializer::OptionSerializer, EncodedTransaction, EncodedTransactionWithStatusMeta,
@@ -16,17 +14,9 @@ use std::{
     thread::sleep,
     time::{Duration, Instant},
 };
+pub mod utils;
 
-// TODO NOTE: "The program should begin tracking from the latest block" note latest *block*, not slot
-// TODO graceful shutdown
-// TODO add logic to prevent exceeding rate limit, ie count number of requests every 10 seconds
-// TODO https://solscan.io/tx/3ybfF... seems to just use one sig from the transaction, but the API provides a Vec... when can there be more than 1 sig?
-// TODO combine transfers between the same accounts in the same direction in the same transaction?
-// TODO techinically we don't need to keep asking for slot numbers, we can just calculate them ourselves and save 1 request for the rate limiting
-// TODO on mainnet every 5secs or so we get get rate limited for 10secs, but not on devnet, but also can't find USDC on devnet atm...
-
-// USDC
-const TOKEN_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const USDC_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
 pub fn make_block_config() -> RpcBlockConfig {
     let mut rpc_block_config = RpcBlockConfig::default();
@@ -34,35 +24,6 @@ pub fn make_block_config() -> RpcBlockConfig {
     rpc_block_config.transaction_details = Some(TransactionDetails::Full);
     rpc_block_config.max_supported_transaction_version = Some(0);
     rpc_block_config
-}
-
-pub fn get_all_successful_usdc_transactions(block: UiConfirmedBlock) -> Vec<String> {
-    let mut transaction_signatures = Vec::new();
-    if let Some(transactions) = block.transactions {
-        for transaction in transactions {
-            // print_transaction_transfers(transaction);
-            let debug_string = format!("{transaction:?}");
-
-            if transaction.meta.unwrap().err.is_none() && debug_string.contains(TOKEN_MINT_ADDRESS)
-            {
-                let signature = match &transaction.transaction {
-                    EncodedTransaction::LegacyBinary(_) => todo!(),
-                    EncodedTransaction::Binary(_, _) => todo!(),
-                    EncodedTransaction::Json(ui_transaction) => ui_transaction.signatures.clone(),
-                    EncodedTransaction::Accounts(_) => todo!(),
-                };
-                if signature.len() > 1 {
-                    // TODO
-                    transaction_signatures.push(signature.first().unwrap().clone());
-                } else {
-                    transaction_signatures.push(signature.first().unwrap().clone());
-                }
-            }
-        }
-    } else {
-        eprintln!("Error: no transactions found for block");
-    }
-    transaction_signatures
 }
 
 fn write_transaction_transfers<W: Write>(
@@ -91,7 +52,7 @@ fn write_transaction_transfers<W: Write>(
             match meta.pre_token_balances {
                 OptionSerializer::Some(ui_transaction_token_balances) => {
                     for pre_ui_transaction_token_balance in ui_transaction_token_balances {
-                        if pre_ui_transaction_token_balance.mint == TOKEN_MINT_ADDRESS {
+                        if pre_ui_transaction_token_balance.mint == USDC_MINT_ADDRESS {
                             let pub_key = parsed_accounts
                                 [pre_ui_transaction_token_balance.account_index as usize]
                                 .pubkey
@@ -178,14 +139,8 @@ pub fn run() -> Result<()> {
     let rpc_block_config = make_block_config();
     let mut current_slot = client.get_slot().unwrap();
 
-    // block slot with a few USDC transfers: 250684537
-    // let slot = 250684537;
-    // let block = client.get_block_with_config(slot, rpc_block_config)?;
-    
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-    
-    // write_block_transfers(block, slot, &mut handle)?;
 
     let mut rate_limit_period_start = Instant::now(); // Start timing the iteration
     let mut request_count = 0;
@@ -243,19 +198,14 @@ pub fn run() -> Result<()> {
 
         let elapsed = iteration_start.elapsed();
     }
-
-    // let transactions = get_all_successful_usdc_transactions(block);
-    // for t in transactions {
-    //     println!("{t}");
-    // }
-
-    Ok(())
 }
 
 // >8 -> xx.xx (remove decimals if 00)
 // 7 -> x.xxx x
 // 6 -> 0.xxx xxx
 // 5 -> 0.0xx xxx
+// 4 -> 0.00x xxx
+// etc
 fn format_amount(raw_amount: &str) -> Option<String> {
     let amount = if raw_amount.len() > 7 {
         let pre_decy = raw_amount[..raw_amount.len() - 6]
@@ -348,7 +298,7 @@ fn handle_parsed_instruction(
             return Err(anyhow!("source and destination mint do not match"));
         }
 
-        if source_mint == TOKEN_MINT_ADDRESS {
+        if source_mint == USDC_MINT_ADDRESS {
             let (raw_amount, message) = if type_ == "transfer" {
                 let raw_amount = info["amount"].take();
                 let message = "amount not found in instruction JSON";
