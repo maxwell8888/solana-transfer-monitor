@@ -1,4 +1,5 @@
-use anyhow::{anyhow, Context, Ok, Result};
+// use anyhow::{anyhow, Context, Ok, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig};
 use solana_sdk::commitment_config::CommitmentConfig;
@@ -12,6 +13,7 @@ use std::{
     io::{self, Write},
     str::from_utf8, // Correctly import from_utf8
 };
+use tokio::time::{Duration, Instant};
 
 // TODO NOTE: "The program should begin tracking from the latest block" note latest *block*, not slot
 // TODO graceful shutdown
@@ -19,6 +21,7 @@ use std::{
 // TODO https://solscan.io/tx/3ybfF... seems to just use one sig from the transaction, but the API provides a Vec... when can there be more than 1 sig?
 // TODO combine transfers between the same accounts in the same direction in the same transaction?
 // TODO techinically we don't need to keep asking for slot numbers, we can just calculate them ourselves and save 1 request for the rate limiting
+// TODO on mainnet every 5secs or so we get get rate limited for 10secs, but not on devnet, but also can't find USDC on devnet atm...
 
 // USDC
 const TOKEN_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
@@ -109,8 +112,8 @@ fn write_transaction_transfers<W: Write>(
             match meta.inner_instructions {
                 OptionSerializer::Some(intructions_vec) => {
                     for instructions in intructions_vec {
-                        for intruction in instructions.instructions {
-                            match intruction {
+                        for instruction in instructions.instructions {
+                            match instruction {
                                 UiInstruction::Compiled(_) => {
                                     todo!()
                                 }
@@ -124,8 +127,8 @@ fn write_transaction_transfers<W: Write>(
                                                 )?;
                                                 if let Some(transfer) = transfer {
                                                     if print_sig {
-                                                        // println!("");
-                                                        // println!("signature: {signature:?}");
+                                                        println!("");
+                                                        println!("signature: {signature:?}");
                                                         print_sig = false;
                                                     }
                                                     transfer.write(writer)?;
@@ -152,6 +155,7 @@ pub fn write_block_transfers<W: Write>(
     slot: u64,
     writer: &mut W,
 ) -> Result<()> {
+    // dbg!(&block);
     writeln!(writer, "Latest block: {slot}")?;
 
     if let Some(transactions) = block.transactions {
@@ -170,20 +174,77 @@ pub async fn run() -> Result<()> {
     // let rpc_url = "https://api.devnet.solana.com".to_string();
     let client = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::finalized());
 
-    let _current_slot = client.get_slot().unwrap();
-
-    // block slot with lots of USDC transfers: 250655260
-    let _slot = 250655260;
+    let rpc_block_config = make_block_config();
+    let mut current_slot = client.get_slot().unwrap();
 
     // block slot with a few USDC transfers: 250684537
-    let slot = 250684537;
-
-    let block = client.get_block_with_config(slot, make_block_config())?;
+    // let slot = 250684537;
+    // let block = client.get_block_with_config(slot, rpc_block_config)?;
 
     let stdout = io::stdout();
     let mut handle = stdout.lock();
 
-    write_block_transfers(block, slot, &mut handle)?;
+    // write_block_transfers(block, slot, &mut handle)?;
+
+    let mut rate_limit_period_start = Instant::now(); // Start timing the iteration
+    let mut request_count = 0;
+    loop {
+        let iteration_start = Instant::now();
+
+        // Reset rate limit period and request count every 10 seconds
+        if rate_limit_period_start.elapsed() > Duration::from_secs(10) {
+            println!("reset rate limit");
+            rate_limit_period_start = Instant::now();
+            request_count = 0;
+        }
+        // if request_count > 99 {
+        if request_count > 39 {
+            // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
+            println!("exceeded rate limit");
+            tokio::time::sleep(Duration::from_millis(1000)).await;
+            continue;
+        }
+        request_count += 1;
+
+        let slots = client.get_blocks(current_slot, None).unwrap();
+        // println!("{slots:?}");
+        println!("slots.len(): {}", slots.len());
+        if let Some(last_slot) = slots.last() {
+            current_slot = last_slot + 1;
+        }
+
+        for slot in slots.clone() {
+            // Reset rate limit period and request count every 10 seconds
+            if rate_limit_period_start.elapsed() > Duration::from_secs(10) {
+                println!("reset rate limit");
+                rate_limit_period_start = Instant::now();
+                request_count = 0;
+            }
+            if request_count > 99 {
+                // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
+                println!("exceeded rate limit");
+                tokio::time::sleep(Duration::from_millis(1000)).await;
+                continue;
+            }
+            request_count += 1;
+
+            let get_block_start = Instant::now();
+            let block = client
+                .get_block_with_config(slot, rpc_block_config)
+                .unwrap();
+            // let get_block_elapsed = get_block_start.elapsed(); // Calculate elapsed time for this iteration
+            // dbg!(get_block_elapsed);
+            // tokio::time::sleep(Duration::from_millis(500)).await; // Wait a bit before the next query to avoid rate limiting
+            write_block_transfers(block, slot, &mut handle)?;
+        }
+
+        // current_slot += 1; // Move to the next slot
+        // tokio::time::sleep(Duration::from_millis(1000)).await; // Wait a bit before the next query to avoid rate limiting
+
+        let elapsed = iteration_start.elapsed(); // Calculate elapsed time for this iteration
+                                                 // dbg!(elapsed);
+                                                 // dbg!(elapsed.checked_div(slots.len() as u32));
+    }
 
     // let transactions = get_all_successful_usdc_transactions(block);
     // for t in transactions {
@@ -196,7 +257,8 @@ pub async fn run() -> Result<()> {
 // >8 -> xx.xx (remove decimals if 00)
 // 7 -> x.xxx x
 // 6 -> 0.xxx xxx
-fn format_amount(raw_amount: &str) -> String {
+// 5 -> 0.0xx xxx
+fn format_amount(raw_amount: &str) -> Option<String> {
     let amount = if raw_amount.len() > 7 {
         let pre_decy = raw_amount[..raw_amount.len() - 6]
             .as_bytes()
@@ -216,11 +278,21 @@ fn format_amount(raw_amount: &str) -> String {
         format!("{}.{}", &raw_amount[..1], &raw_amount[1..5])
     } else if raw_amount.len() == 6 {
         format!("0.{raw_amount}")
+    } else if raw_amount.len() == 5 {
+        format!("0.0{raw_amount}")
+    } else if raw_amount.len() == 4 {
+        format!("0.00{raw_amount}")
+    } else if raw_amount.len() == 3 {
+        format!("0.000{raw_amount}")
+    } else if raw_amount.len() == 2 {
+        format!("0.000{raw_amount}")
+    } else if raw_amount == "0" {
+        format!("0")
     } else {
         dbg!(raw_amount);
-        todo!()
+        return None;
     };
-    amount
+    Some(amount)
 }
 pub struct Transfer {
     pub source_owner: String,
@@ -248,6 +320,7 @@ fn handle_parsed_instruction(
     mut parsed_instruction: Value,
     accounts_map: &mut HashMap<String, (String, String)>,
 ) -> Result<Option<Transfer>> {
+    let parsed_instruction_copy = parsed_instruction.clone();
     let type_ = parsed_instruction["type"].take();
     let type_ = type_
         .as_str()
@@ -292,11 +365,17 @@ fn handle_parsed_instruction(
             };
             let raw_amount = raw_amount.as_str().context(message)?;
 
-            return Ok(Some(Transfer {
-                source_owner: source_owner.clone(),
-                destination_owner: destination_owner.clone(),
-                formatted_amount: format_amount(raw_amount),
-            }));
+            let formatted_amount = format_amount(raw_amount);
+            if let Some(formatted_amount) = formatted_amount {
+                return Ok(Some(Transfer {
+                    source_owner: source_owner.clone(),
+                    destination_owner: destination_owner.clone(),
+                    formatted_amount,
+                }));
+            } else {
+                dbg!(parsed_instruction_copy);
+                return Err(anyhow!("fucked"));
+            }
         }
     }
     Ok(None)
