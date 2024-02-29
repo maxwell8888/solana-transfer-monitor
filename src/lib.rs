@@ -1,7 +1,8 @@
-// use anyhow::{anyhow, Context, Ok, Result};
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
-use solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig};
+use solana_client::{
+    connection_cache::BlockingClientConnection, rpc_client::RpcClient, rpc_config::RpcBlockConfig,
+};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_transaction_status::{
     option_serializer::OptionSerializer, EncodedTransaction, EncodedTransactionWithStatusMeta,
@@ -11,9 +12,10 @@ use solana_transaction_status::{
 use std::{
     collections::HashMap,
     io::{self, Write},
-    str::from_utf8, // Correctly import from_utf8
+    str::from_utf8,
+    thread::sleep,
+    time::{Duration, Instant},
 };
-use tokio::time::{Duration, Instant};
 
 // TODO NOTE: "The program should begin tracking from the latest block" note latest *block*, not slot
 // TODO graceful shutdown
@@ -155,7 +157,6 @@ pub fn write_block_transfers<W: Write>(
     slot: u64,
     writer: &mut W,
 ) -> Result<()> {
-    // dbg!(&block);
     writeln!(writer, "Latest block: {slot}")?;
 
     if let Some(transactions) = block.transactions {
@@ -169,7 +170,7 @@ pub fn write_block_transfers<W: Write>(
     Ok(())
 }
 
-pub async fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     let rpc_url = "https://api.mainnet-beta.solana.com".to_string();
     // let rpc_url = "https://api.devnet.solana.com".to_string();
     let client = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::finalized());
@@ -180,10 +181,10 @@ pub async fn run() -> Result<()> {
     // block slot with a few USDC transfers: 250684537
     // let slot = 250684537;
     // let block = client.get_block_with_config(slot, rpc_block_config)?;
-
+    
     let stdout = io::stdout();
     let mut handle = stdout.lock();
-
+    
     // write_block_transfers(block, slot, &mut handle)?;
 
     let mut rate_limit_period_start = Instant::now(); // Start timing the iteration
@@ -201,7 +202,7 @@ pub async fn run() -> Result<()> {
         if request_count > 39 {
             // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
             println!("exceeded rate limit");
-            tokio::time::sleep(Duration::from_millis(1000)).await;
+            sleep(Duration::from_millis(1000));
             continue;
         }
         request_count += 1;
@@ -223,7 +224,7 @@ pub async fn run() -> Result<()> {
             if request_count > 99 {
                 // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
                 println!("exceeded rate limit");
-                tokio::time::sleep(Duration::from_millis(1000)).await;
+                sleep(Duration::from_millis(1000));
                 continue;
             }
             request_count += 1;
@@ -232,18 +233,15 @@ pub async fn run() -> Result<()> {
             let block = client
                 .get_block_with_config(slot, rpc_block_config)
                 .unwrap();
-            // let get_block_elapsed = get_block_start.elapsed(); // Calculate elapsed time for this iteration
+            let get_block_elapsed = get_block_start.elapsed();
             // dbg!(get_block_elapsed);
-            // tokio::time::sleep(Duration::from_millis(500)).await; // Wait a bit before the next query to avoid rate limiting
             write_block_transfers(block, slot, &mut handle)?;
+            // sleep(Duration::from_millis(1000));
         }
 
         // current_slot += 1; // Move to the next slot
-        // tokio::time::sleep(Duration::from_millis(1000)).await; // Wait a bit before the next query to avoid rate limiting
 
-        let elapsed = iteration_start.elapsed(); // Calculate elapsed time for this iteration
-                                                 // dbg!(elapsed);
-                                                 // dbg!(elapsed.checked_div(slots.len() as u32));
+        let elapsed = iteration_start.elapsed();
     }
 
     // let transactions = get_all_successful_usdc_transactions(block);
