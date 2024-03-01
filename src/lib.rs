@@ -1,6 +1,5 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Result};
 use instructions::handle_parsed_instruction;
-use serde_json::Value;
 use solana_client::{rpc_client::RpcClient, rpc_config::RpcBlockConfig};
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_transaction_status::{
@@ -10,16 +9,15 @@ use solana_transaction_status::{
 };
 use std::{
     collections::HashMap,
-    fmt,
     io::{self, Write},
-    str::from_utf8,
     thread::sleep,
     time::{Duration, Instant},
 };
-pub mod instructions;
-pub mod utils;
 use tracing::{debug, info, trace};
 use tracing_subscriber::EnvFilter;
+
+pub mod instructions;
+pub mod utils;
 
 const USDC_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
@@ -31,7 +29,7 @@ const MAX_REQUESTS_PER_PERIOD: usize = 40;
 pub fn run() -> Result<()> {
     if let Ok(level) = std::env::var("RUST_LOG") {
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(&format!("solana_transfer_monitor={level}")))
+            .with_env_filter(EnvFilter::new(format!("solana_transfer_monitor={level}")))
             .init();
     }
 

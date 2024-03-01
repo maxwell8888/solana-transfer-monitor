@@ -1,5 +1,6 @@
-use crate::USDC_MINT_ADDRESS;
 use solana_transaction_status::{EncodedTransaction, UiConfirmedBlock};
+
+use crate::USDC_MINT_ADDRESS;
 
 /// Get all successful USDC transactions
 /// Do text search of data returned by get_block so we can verify the parsing functions are successfully accounting for all transactions involving USDC

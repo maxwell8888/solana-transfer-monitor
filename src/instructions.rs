@@ -1,7 +1,6 @@
-use std::{collections::HashMap, fmt, str::from_utf8};
-
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
+use std::{collections::HashMap, fmt, str::from_utf8};
 
 use crate::USDC_MINT_ADDRESS;
 
