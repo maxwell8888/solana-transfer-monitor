@@ -21,6 +21,11 @@ use tracing_subscriber::EnvFilter;
 
 const USDC_MINT_ADDRESS: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 
+// https://solana.com/docs/core/clusters
+const RATE_LIMIT_PERIOD: u64 = 10;
+// const MAX_REQUESTS_PER_PERIOD: usize = 100;
+const MAX_REQUESTS_PER_PERIOD: usize = 40;
+
 pub fn make_block_config() -> RpcBlockConfig {
     let mut rpc_block_config = RpcBlockConfig::default();
     rpc_block_config.encoding = Some(UiTransactionEncoding::JsonParsed);
@@ -129,6 +134,23 @@ pub fn write_block_transfers<W: Write>(
     Ok(())
 }
 
+fn check_request_instants(request_instants: &mut Vec<Instant>) {
+    trace!("checking request intants");
+    // Remove requests older than the rate limit period (10secs)
+    for i in 0..request_instants.len() {
+        if request_instants[i].elapsed() < Duration::from_secs(RATE_LIMIT_PERIOD) {
+            request_instants.drain(..i);
+            break;
+        }
+    }
+    if request_instants.len() > MAX_REQUESTS_PER_PERIOD {
+        // Exceeded rate limit so wait a while before the next iteration to avoid rate limiting
+        trace!("exceeded rate limit, waiting 500ms");
+        sleep(Duration::from_millis(500));
+        check_request_instants(request_instants);
+    }
+}
+
 pub fn run() -> Result<()> {
     if let Ok(level) = std::env::var("RUST_LOG") {
         tracing_subscriber::fmt()
@@ -148,66 +170,44 @@ pub fn run() -> Result<()> {
     // );
 
     let rpc_block_config = make_block_config();
-    let mut current_slot = client.get_slot()?;
+    let mut starting_slot = client.get_slot()?;
 
     let stdout = io::stdout();
     let mut handle = stdout.lock();
 
-    let mut rate_limit_period_start = Instant::now(); // Start timing the iteration
-    let mut request_count = 0;
+    let mut request_instants: Vec<Instant> = Vec::new();
+
     loop {
         let iteration_start = Instant::now();
 
-        // Reset rate limit period and request count every 10 seconds
-        if rate_limit_period_start.elapsed() > Duration::from_secs(10) {
-            trace!("reset rate limit");
-            rate_limit_period_start = Instant::now();
-            request_count = 0;
-        }
-        // if request_count > 99 {
-        if request_count > 39 {
-            // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
-            trace!("exceeded rate limit");
-            sleep(Duration::from_millis(1000));
-            continue;
-        }
-        request_count += 1;
+        check_request_instants(&mut request_instants);
 
-        let slots = client.get_blocks(current_slot, None)?;
-        // println!("{slots:?}");
-        // println!("slots.len(): {}", slots.len());
-        debug!("slots.len(): {}", slots.len());
+        let slots = client.get_blocks(starting_slot, None)?;
+        debug!("client.get_blocks slots.len(): {}", slots.len());
+        request_instants.push(Instant::now());
+
         if let Some(last_slot) = slots.last() {
-            current_slot = last_slot + 1;
+            trace!("increment starting slot");
+            starting_slot = last_slot + 1;
+        } else {
+            trace!("no slots returned, waiting 500ms");
+            sleep(Duration::from_millis(500));
+            continue;
         }
 
         for slot in slots.clone() {
-            // Reset rate limit period and request count every 10 seconds
-            if rate_limit_period_start.elapsed() > Duration::from_secs(10) {
-                trace!("reset rate limit");
-                rate_limit_period_start = Instant::now();
-                request_count = 0;
-            }
-            if request_count > 99 {
-                // Exceeded rate limit so Wait a while before the next iteration to avoid rate limiting
-                trace!("exceeded rate limit");
-                sleep(Duration::from_millis(1000));
-                continue;
-            }
-            request_count += 1;
+            check_request_instants(&mut request_instants);
 
             let get_block_start = Instant::now();
             trace!("request block {slot}");
             let block = client.get_block_with_config(slot, rpc_block_config)?;
+            request_instants.push(Instant::now());
             trace!(
                 "get_block_with_config took: {:?}",
                 get_block_start.elapsed()
             );
             write_block_transfers(block, slot, &mut handle)?;
-            // sleep(Duration::from_millis(1000));
         }
-
-        // current_slot += 1; // Move to the next slot
 
         trace!("loop iteration elapsed in {:?}", iteration_start.elapsed());
     }
