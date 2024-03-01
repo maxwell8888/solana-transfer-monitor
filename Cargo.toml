@@ -11,6 +11,8 @@ solana-pubsub-client = "1.18.3"
 solana-rpc-client-api = "1.18.3"
 solana-sdk = "1.18.3"
 solana-transaction-status = "1.18.3"
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
