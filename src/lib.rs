@@ -9,6 +9,7 @@ use solana_transaction_status::{
 };
 use std::{
     collections::HashMap,
+    fmt,
     io::{self, Write},
     str::from_utf8,
     thread::sleep,
@@ -70,7 +71,7 @@ fn write_transaction_transfers<W: Write>(
             }
 
             let mut first_transfer = true;
-            
+
             match meta.inner_instructions {
                 OptionSerializer::Some(intructions_vec) => {
                     for instructions in intructions_vec {
@@ -92,7 +93,7 @@ fn write_transaction_transfers<W: Write>(
                                                         debug!("tx signature: {signature:?}");
                                                         first_transfer = false;
                                                     }
-                                                    transfer.write(writer)?;
+                                                    writeln!(writer, "{transfer}")?;
                                                 }
                                             }
                                         }
@@ -249,20 +250,17 @@ pub struct Transfer {
     pub destination_owner: String,
     pub formatted_amount: String,
 }
-impl Transfer {
-    pub fn write<W: Write>(&self, writer: &mut W) -> Result<()> {
+impl fmt::Display for Transfer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Transfer {
             source_owner,
             destination_owner,
             formatted_amount,
         } = self;
-
-        writeln!(
-            writer,
+        write!(
+            f,
             "TX detected: {source_owner} sent {formatted_amount} USDC to {destination_owner}"
-        )?;
-
-        Ok(())
+        )
     }
 }
 

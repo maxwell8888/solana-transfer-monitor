@@ -113,7 +113,7 @@ fn transfers_for_block_250684537() {
             destination_owner: tx.1.to_string(),
             formatted_amount: tx.2.to_string(),
         };
-        transfer.write(&mut test_cases_buffer).unwrap();
+        writeln!(&mut test_cases_buffer, "{transfer}").unwrap();
     }
     let expected = from_utf8(&test_cases_buffer).unwrap();
 
