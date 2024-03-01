@@ -2,7 +2,7 @@ use pretty_assertions::assert_eq;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_transfer_monitor::utils::get_all_successful_usdc_transactions;
-use solana_transfer_monitor::{make_block_config, write_block_transfers, Transfer};
+use solana_transfer_monitor::{instructions::Transfer, make_block_config, write_block_transfers};
 use std::io::Write;
 use std::str::from_utf8;
 
