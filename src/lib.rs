@@ -97,7 +97,7 @@ pub fn make_block_config() -> RpcBlockConfig {
 }
 
 fn check_request_instants(request_instants: &mut Vec<Instant>) {
-    trace!("checking request intants");
+    trace!("checking request instants");
     // Remove requests older than the rate limit period (10secs)
     for i in 0..request_instants.len() {
         if request_instants[i].elapsed() < Duration::from_secs(RATE_LIMIT_PERIOD) {

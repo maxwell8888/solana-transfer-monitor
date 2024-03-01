@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::{collections::HashMap, fmt, str::from_utf8};
 
@@ -34,7 +34,7 @@ pub fn handle_parsed_instruction(
         };
 
         if source_mint != destination_mint {
-            return Err(anyhow!("source and destination mint do not match"));
+            bail!("source and destination mint do not match");
         }
 
         if source_mint == USDC_MINT_ADDRESS {
